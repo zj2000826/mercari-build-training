@@ -1,8 +1,12 @@
 FROM alpine
 
+RUN apk add --update --no-cache tesseract-ocr python3 py3-pip
+RUN apk add --update --no-cache tesseract-ocr-data-eng tesseract-ocr-data-jpn
 RUN addgroup -S mercari && adduser -S trainee -G mercari
 # RUN chown -R trainee:mercari /path/to/db
 
 USER trainee
 
-CMD ["python", "-V"]
+#CMD ["python3", "-V"]
+CMD ["tesseract", "/data/text_ja.png", "stdout", "-l", "jpn"]
+
