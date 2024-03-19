@@ -1,11 +1,12 @@
 import os
 import logging
 import pathlib
-from fastapi import FastAPI, Form, HTTPException, File, UploadFile
+from fastapi import FastAPI, Form, HTTPException, File, UploadFile, Query
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import hashlib
 import json
+import sqlite3
 
 app = FastAPI()
 logging.basicConfig(level=logging.DEBUG)
@@ -38,22 +39,79 @@ def add_item(name: str = Form(...), category: str = Form(...), image: UploadFile
     with open(image_path, 'wb') as f:
         f.write(image_content)
 
-    with open('items.json', 'r') as f:
-        items_data = json.load(f)
+    conn = sqlite3.connect('mercari.sqlite3')
+    cur = conn.cursor()
 
-    items_data['items'].append({'name': name, 'category': category, 'image': image_filename})
+    cur.execute("SELECT id FROM categories WHERE name = ?", (category,))
+    category_content = cur.fetchone()
 
-    with open('items.json', 'w') as f:
-        json.dump(items_data, f, indent=4)
+    if not category_content:
+        cur.execute("INSERT INTO categories (name) VALUES (?)", (category,))
+        conn.commit()  
+        category_id = cur.lastrowid  
+    else:
+        category_id = category[0]
+
+    cur.execute("INSERT INTO items (name, category_id, image) VALUES (?, ?, ?)",
+                (name, category_id, image_filename))
+    conn.commit()
+    conn.close()
 
     return {"name": name, "category": category, "image_name": image_filename}
 
+
+@app.get("/items")
+def get_items():
+    conn = sqlite3.connect('mercari.sqlite3')
+    cur = conn.cursor()
+
+    cur.execute("""SELECT items.id, items.name, categories.name AS category_name, items.image
+                   FROM items
+                   JOIN categories ON items.category_id = categories.id""")
+    items = cur.fetchall()
+    conn.close()
+
+    items_list = [{"id": item[0], "name": item[1], "category": item[2], "image_name": item[3]} for item in items]
+
+    return {"items": items_list}
+
+
 @app.get("/items/{item_id}")
 def get_item(item_id: int):
-    with open('items.json', 'r') as f:
-        items = json.load(f)
-    items = items.get("items", [])
-    return items[item_id]
+    conn = sqlite3.connect('mercari.sqlite3')
+    cur = conn.cursor()
+
+    cur.execute("""SELECT items.id, items.name, categories.name, items.image
+                   FROM items
+                   INNER JOIN categories ON items.category_id = categories.id
+                   WHERE items.id = ?""", (item_id,))
+    item = cur.fetchone()
+
+    conn.close()
+    
+    if item is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"id": item[0], "name": item[1], "category": item[2], "image_name": item[3]}
+
+
+@app.get("/search")
+def search_items(keyword: str = Query(None)):
+    conn = sqlite3.connect('mercari.sqlite3')
+    cur = conn.cursor()
+
+    cur.execute("""SELECT items.id, items.name, categories.name, items.image
+                   FROM items
+                   JOIN categories ON items.category_id = categories.id
+                   WHERE items.name LIKE ?""", (f"%{keyword}%",))
+
+    items = cur.fetchall()
+    conn.close()
+
+    if items:
+        items_list = [{"id": item[0], "name": item[1], "category": item[2], "image_name": item[3]} for item in items]
+        return {"items": items_list}
+    else:
+        raise HTTPException(status_code=404, detail="No items found with that keyword")
 
 
 @app.get("/image/{image_name}")
